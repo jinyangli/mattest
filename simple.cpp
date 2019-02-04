@@ -3,19 +3,23 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <time.h>
+#include <unistd.h>
 #include <igl/AtA_cached.h>
+#include <igl/Timer.h>
+#include <sys/types.h>
+
+#include "util.h"
 
 //#include "mysparse.h"
 
 using namespace Eigen;
 using namespace igl;
 
-typedef Eigen::Triplet<float> T;
-typedef Eigen::SparseMatrix<float> SpMat;
-
 const int nonzeros_per_col = 6;
 
 bool verbose = false;
+
+void MyMatMul(float *A, float *out);
 
 long long
 timediff(struct timespec ts, struct timespec ts0)
@@ -37,131 +41,120 @@ buildDenseMatrix(MatrixXf &mat)
 void
 DenseMatMul(int n)
 {
-	std::cout << "matrix size: " << n << std::endl;
 
 	MatrixXf m1 = MatrixXf::Zero(n, n);
 	MatrixXf m2 = MatrixXf::Zero(n, n);
 	buildDenseMatrix(m1);
 	buildDenseMatrix(m2);
- 
-	struct timespec ts1, ts2;
-        clock_gettime(CLOCK_REALTIME, &ts1);
 
+       	igl::Timer t;	
+	t.start();
 	MatrixXf m = m1 * m2;
+	t.stop();
 
-        clock_gettime(CLOCK_REALTIME, &ts2);
+	std::cout << "Dense MatMul timing: " << t.getElapsedTimeInMicroSec() << " us"  << " m[0,0]=" << m(0,0) << std::endl;
 
-	std::cout << "Dense MatMul timing: " << timediff(ts2,ts1) << " us"  << " m[0,0]=" << m(0,0) << std::endl;
-
-}
-
-void buildSpMatrix(SpMat &mat)
-{
-	std::vector<T> coeff;
-	for (int i = 0; i < mat.outerSize(); i++) {
-		for (int j = 0; j < nonzeros_per_col; j++) {
-			coeff.push_back(T(rand()%mat.innerSize(), i, (double) rand() / (RAND_MAX)));
-		}
-	}
-	mat.setFromTriplets(coeff.begin(), coeff.end());
-	std::cout << "built sparse matrix " << mat.outerSize() << " x " << mat.innerSize() << std::endl;
 }
 
 void
 SparseMatMul(int n)
 {
-	SpMat A(n,n); 
+	Eigen::SparseMatrix<float> A(n,n); 
 	Eigen::SparseMatrix<float, RowMajor> At;
 
-	SpMat AtA(n,n);
-       	buildSpMatrix(A);
-	struct timespec ts1, ts2;
-        clock_gettime(CLOCK_REALTIME, &ts1);
+	Eigen::SparseMatrix<float> AtA(n,n);
+       	buildSpMatrix(A, nonzeros_per_col);
+	igl::Timer t;
 
+	t.start();
 	At = A.transpose();
 	AtA = A * At;
+	t.stop();
 
-	clock_gettime(CLOCK_REALTIME, &ts2);
-	std::cout << "Sparse MatMul timing: " << timediff(ts2,ts1) << " us"   << " A nonzeros " << A.nonZeros() << " AtA nonzeros " << AtA.nonZeros() << std::endl;
+	std::cout << "Sparse MatMul timing: " << t.getElapsedTimeInMicroSec() << " us"   << " A nonzeros " << A.nonZeros() << " AtA nonzeros " << AtA.nonZeros() << std::endl;
 	std::cout << "Sparse MatMul A " << A.outerSize() << " x " << A.innerSize() << std::endl;
 	std::cout << "Sparse MatMul At " << At.outerSize() << " x " << At.innerSize() << std::endl;
 	std::cout << "Sparse MatMul AtA " << AtA.outerSize() << " x " << AtA.innerSize() << std::endl;
 
 
 }
-/*
+
 void
-MyAtAMatMul(int n)
+CodeGenMatMul(int n)
 {
-	SpMat A(n,n); 
-	Eigen::SparseMatrix<float, RowMajor> At;
+	Eigen::SparseMatrix<float> A(n,n); 
+	Eigen::SparseMatrix<float> AtA(n,n); 
+	igl::AtA_cached_data cache;
+	buildSpMatrix(A, nonzeros_per_col);
+	A.makeCompressed();
+	//this is just used to pre-allocate the space needed for AtA
+	igl::AtA_cached_precompute(A, cache, AtA);
 
-	SpMat AtA(n,n);
-       	buildSpMatrix(A);
-	struct timespec ts1, ts2;
-	At = A.transpose();
+	std::cout << "A.valuePtr() " << A.valuePtr() << " AtA.valuePtr() " << AtA.valuePtr() << std::endl;
+	igl::Timer t;
+	t.start();
+	MyMatMul(A.valuePtr(), AtA.valuePtr());
+	t.stop();
 
-        clock_gettime(CLOCK_REALTIME, &ts1);
-	MySparseProduct(A, At, AtA);
-
-	clock_gettime(CLOCK_REALTIME, &ts2);
-	std::cout << "Sparse MatMul timing: " << timediff(ts2,ts1) << " us"   << " A nonzeros " << A.nonZeros() << " AtA nonzeros " << AtA.nonZeros() << std::endl;
-	std::cout << "Sparse MatMul A " << A.outerSize() << " x " << A.innerSize() << std::endl;
-	std::cout << "Sparse MatMul At " << At.outerSize() << " x " << At.innerSize() << std::endl;
-	std::cout << "Sparse MatMul AtA " << AtA.outerSize() << " x " << AtA.innerSize() << std::endl;
+	std::cout << "CodeGenMatMul timing: " << t.getElapsedTimeInMicroSec() << " us"   << " A nonzeros " << A.nonZeros() << " AtA nonzeros " << AtA.nonZeros() << std::endl;
 }
-*/
+
 void
 AtAMatMul(int n)
 {
-	SpMat A(n, n);
-	SpMat AtA(n, n);
+	Eigen::SparseMatrix<float> A(n, n);
+	Eigen::SparseMatrix<float> AtA(n, n);
 	std::cout << "AtAMatMul A size " << A.outerSize() << " x " << A.innerSize() << std::endl;
 	std::cout << "AtAMatMul A cols " << A.cols() << " rows " << A.rows() << std::endl;
-       	buildSpMatrix(A);
+       	buildSpMatrix(A, nonzeros_per_col);
 	if (verbose) 
 		std::cout << "AtAMatMul A " << A << std::endl;
 
 	A.makeCompressed();
 	igl::AtA_cached_data cache;
 
-	struct timespec ts1, ts2;
-        clock_gettime(CLOCK_REALTIME, &ts1);
+	igl::Timer t;
+	t.start();
 	igl::AtA_cached_precompute(A, cache, AtA);
-	clock_gettime(CLOCK_REALTIME, &ts2);
-	std::cout << "AtA (with pre-compute) timing: " << timediff(ts2,ts1) << " us"   << " A nonzeros " << A.nonZeros() << " AtA nonzeros " << AtA.nonZeros() << std::endl;
+	t.stop();
+
+	std::cout << "AtA pre-compute timing: " << t.getElapsedTimeInMicroSec() << " us"   << " A nonzeros " << A.nonZeros() << " AtA nonzeros " << AtA.nonZeros() << std::endl;
 
 	assert(AtA.isCompressed());
 
-        clock_gettime(CLOCK_REALTIME, &ts1);
+	t.start();
 	igl::AtA_cached(A, cache, AtA);
-	clock_gettime(CLOCK_REALTIME, &ts2);
-	std::cout << "AtA (w/o pre-compute) timing: " << timediff(ts2,ts1) << " us"   << " A nonzeros " << A.nonZeros() << " AtA nonzeros " << AtA.nonZeros() << std::endl;
+	t.stop();
+	std::cout << "AtA cached timing: " << t.getElapsedTimeInMicroSec() << " us"   << " A nonzeros " << A.nonZeros() << " AtA nonzeros " << AtA.nonZeros() << std::endl;
 }
 
 int main(int argc, char **argv)
 {
+	if (argc < 2) {
+		printf("usage: c|s|g <n>\n");
+		exit(1);
+	}
+	srand(1);
 	int n = 1024;
 	if (argc >2) {
 		n = atoi(argv[2]);
 	}
-	if (argc < 2) {
-		printf("usage: a|c|s <n>\n");
-		exit(1);
-	}
+	std::cout << "matrix size: " << n << std::endl;
+
        	assert(n >= 2*nonzeros_per_col);
 
 /*	DenseMatMul(n);	
 	std::cout << "-----------" << std::endl;
 	*/
-	if (argv[1][0] == 's' || argv[1][0] == 'a') {
+	if (argv[1][0] == 's') {
+		std::cout << "-----------" << std::endl;
 		SparseMatMul(n);
+	} else if (argv[1][0] == 'c' ) {
 		std::cout << "-----------" << std::endl;
-	} 
-	if (argv[1][0] == 'c' || argv[1][0] == 'a' ) {
 		AtAMatMul(n);
+	} else if  (argv[1][0] == 'g' ) {
 		std::cout << "-----------" << std::endl;
-	} 
-	//MyAtAMatMul(n);
+		CodeGenMatMul(n);
+	}
 }
 
